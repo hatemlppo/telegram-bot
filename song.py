@@ -1,12 +1,13 @@
 import os
 import subprocess
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from mutagen.easyid3 import EasyID3
 from mutagen.mp3 import MP3
 
-TOKEN = "8229000508:AAHW4D6HDgj8z3beN0IjSjFK0844TvYZapo"  # حط توكن البوت هنا
-ARTIST_NAME = "HATEM_F2"  # اسم المغني الثابت
+# قراءة التوكن من Environment Variable
+TOKEN = os.environ.get("TOKEN")
+ARTIST_NAME = "HATEM_F2"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -72,11 +73,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
 
 
-app = ApplicationBuilder().token(TOKEN).build()
+def main():
+    app = Application.builder().token(TOKEN).build()
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.AUDIO, handle_audio))
-app.add_handler(MessageHandler(filters.VIDEO, handle_video))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.AUDIO, handle_audio))
+    app.add_handler(MessageHandler(filters.VIDEO, handle_video))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-app.run_polling()
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
