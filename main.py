@@ -30,7 +30,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎵 *بوت تعديل الميتاداتا*\n\n"
         "ارسل ملف MP3 او فيديو 🎵📹\n"
         "وبعدها راح اكلك اكتب اسم الاغنية.\n\n"
-        "⚠️ *ملاحظة:* استخراج الصوت من الفيديو قد لا يعمل في بعض الأحيان"
+        "مطور البوت @HATEM_F2" 
     )
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
