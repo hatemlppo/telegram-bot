@@ -1,3 +1,2 @@
-python-telegram-bot>=23.0
-mutagen
-moviepy
+python-telegram-bot==20.7
+mutagen==1.46.0
