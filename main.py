@@ -16,6 +16,10 @@ logging.basicConfig(
 # قراءة التوكن من Environment Variable
 TOKEN = os.environ.get("BOT_TOKEN")
 
+# إعدادات الاشتراك الإجباري
+CHANNEL_USERNAME = "THTOMI"  # معرف القناة (بدون @)
+CHANNEL_LINK = "https://t.me/THTOMI"
+
 # التحقق من وجود ffmpeg
 def check_ffmpeg():
     try:
@@ -24,15 +28,55 @@ def check_ffmpeg():
     except:
         return False
 
+async def check_subscription(user_id, context):
+    """التحقق من اشتراك المستخدم في القناة"""
+    try:
+        member = await context.bot.get_chat_member(chat_id=f"@{CHANNEL_USERNAME}", user_id=user_id)
+        return member.status not in ['left', 'kicked']
+    except Exception as e:
+        logging.error(f"خطأ في التحقق من الاشتراك: {e}")
+        return False
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    
+    # التحقق من الاشتراك
+    is_subscribed = await check_subscription(user_id, context)
+    
+    if not is_subscribed:
+        await update.message.reply_text(
+            f"⚠️ *عذراً، يجب الاشتراك في القناة أولاً*\n\n"
+            f"🔗 [{CHANNEL_USERNAME}]({CHANNEL_LINK})\n\n"
+            f"✅ بعد الاشتراك، أرسل /start مرة أخرى",
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
+        return
+    
     await update.message.reply_text(
         "🎵 *بوت تعديل الميتاداتا*\n\n"
+        "✅ تم التحقق من اشتراكك في القناة\n"
         "ارسل ملف MP3 او فيديو 🎵📹\n"
         "وسأطلب منك اسم الاغنية ثم اسم المغني بالترتيب.",
         parse_mode='Markdown'
     )
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    
+    # التحقق من الاشتراك
+    is_subscribed = await check_subscription(user_id, context)
+    
+    if not is_subscribed:
+        await update.message.reply_text(
+            f"⚠️ *عذراً، يجب الاشتراك في القناة أولاً*\n\n"
+            f"🔗 [{CHANNEL_USERNAME}]({CHANNEL_LINK})\n\n"
+            f"✅ بعد الاشتراك، أرسل /start مرة أخرى",
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
+        return
+    
     try:
         file = await update.message.audio.get_file()
         file_path = f"input_{update.message.from_user.id}.mp3"
@@ -48,6 +92,21 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ حدث خطأ في معالجة الملف")
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    
+    # التحقق من الاشتراك
+    is_subscribed = await check_subscription(user_id, context)
+    
+    if not is_subscribed:
+        await update.message.reply_text(
+            f"⚠️ *عذراً، يجب الاشتراك في القناة أولاً*\n\n"
+            f"🔗 [{CHANNEL_USERNAME}]({CHANNEL_LINK})\n\n"
+            f"✅ بعد الاشتراك، أرسل /start مرة أخرى",
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
+        return
+    
     if not check_ffmpeg():
         await update.message.reply_text("❌ استخراج الصوت من الفيديو غير متاح حالياً")
         return
@@ -85,6 +144,21 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ حدث خطأ في معالجة الفيديو")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    
+    # التحقق من الاشتراك
+    is_subscribed = await check_subscription(user_id, context)
+    
+    if not is_subscribed:
+        await update.message.reply_text(
+            f"⚠️ *عذراً، يجب الاشتراك في القناة أولاً*\n\n"
+            f"🔗 [{CHANNEL_USERNAME}]({CHANNEL_LINK})\n\n"
+            f"✅ بعد الاشتراك، أرسل /start مرة أخرى",
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
+        return
+    
     # التحقق من وجود ملف
     if "file_path" not in context.user_data:
         await update.message.reply_text("❌ أرسل ملف أولاً")
@@ -130,7 +204,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     audio=f,
                     title=song_title,
                     performer=artist_name,
-                    caption=f"✅ تم التعديل بنجاح\n🎵 {song_title} - {artist_name}"
+                    caption=f"✅ تم التعديل بنجاح\n🎵 {song_title} - {artist_name}\n\n🔗 اشترك في قناتنا: {CHANNEL_LINK}"
                 )
 
             # تنظيف الملفات
