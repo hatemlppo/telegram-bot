@@ -1,9 +1,9 @@
-
 import os
 import subprocess
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+import asyncio
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from mutagen.easyid3 import EasyID3
 from mutagen.mp3 import MP3
 
@@ -14,49 +14,96 @@ logging.basicConfig(
 )
 
 # قراءة التوكن من Environment Variable
-TOKEN = os.environ.get("TOKEN")
-DEFAULT_ARTIST = "اغنيتي"  # اسم افتراضي
+TOKEN = os.environ.get("BOT_TOKEN")
+
+# التحقق من وجود ffmpeg
+def check_ffmpeg():
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+        return True
+    except:
+        return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("تعيين اسم مغني جديد", callback_data='set_artist')],
-        [InlineKeyboardButton("استخدام الاسم الافتراضي", callback_data='default_artist')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await update.message.reply_text(
-        "🎵 *مرحباً بك في بوت تعديل الميتاداتا*\n\n"
-        "أولاً: اختر اسم المغني:\n"
-        "📝 بعدها أرسل ملف MP3 أو فيديو",
-        reply_markup=reply_markup
-   " تم تطوير بواسطه @HATEM_F2"
- )
+        "🎵 *بوت تعديل الميتاداتا*\n\n"
+        "ارسل ملف MP3 او فيديو 🎵📹\n"
+        "وسأطلب منك اسم الاغنية ثم اسم المغني بالترتيب.",
+        parse_mode='Markdown'
+    )
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == 'set_artist':
-        await query.edit_message_text("أرسل اسم المغني الجديد:")
-        context.user_data['waiting_for_artist'] = True
-    elif query.data == 'default_artist':
-        context.user_data['artist_name'] = DEFAULT_ARTIST
-        await query.edit_message_text(f"✅ تم اختيار الاسم الافتراضي: {DEFAULT_ARTIST}\nأرسل الملف الآن:")
+async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        file = await update.message.audio.get_file()
+        file_path = f"input_{update.message.from_user.id}.mp3"
+        await file.download_to_drive(file_path)
+
+        context.user_data["file_path"] = file_path
+        context.user_data["file_type"] = "audio"
+        context.user_data["step"] = "waiting_for_title"  # ننتظر اسم الاغنية أولاً
+        
+        await update.message.reply_text("✅ تم استلام الملف\n📝 أرسل اسم الاغنية:")
+    except Exception as e:
+        logging.error(f"خطأ في معالجة الصوت: {e}")
+        await update.message.reply_text("❌ حدث خطأ في معالجة الملف")
+
+async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_ffmpeg():
+        await update.message.reply_text("❌ استخراج الصوت من الفيديو غير متاح حالياً")
+        return
+
+    try:
+        file = await update.message.video.get_file()
+        video_path = f"input_video_{update.message.from_user.id}.mp4"
+        audio_path = f"extracted_{update.message.from_user.id}.mp3"
+
+        await file.download_to_drive(video_path)
+        
+        # رسالة انتظار
+        await update.message.reply_text("⏳ جاري استخراج الصوت من الفيديو...")
+
+        # استخراج الصوت من الفيديو
+        result = subprocess.run([
+            "ffmpeg", "-i", video_path,
+            "-q:a", "0", "-map", "a",
+            audio_path, "-y"
+        ], capture_output=True, text=True)
+
+        if result.returncode != 0:
+            raise Exception(f"FFmpeg error: {result.stderr}")
+
+        os.remove(video_path)
+
+        context.user_data["file_path"] = audio_path
+        context.user_data["file_type"] = "video"
+        context.user_data["step"] = "waiting_for_title"  # ننتظر اسم الاغنية أولاً
+        
+        await update.message.reply_text("✅ تم استخراج الصوت\n📝 أرسل اسم الاغنية:")
+        
+    except Exception as e:
+        logging.error(f"خطأ في معالجة الفيديو: {e}")
+        await update.message.reply_text("❌ حدث خطأ في معالجة الفيديو")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # إذا كان المستخدم يريد تعيين اسم مغني جديد
-    if context.user_data.get('waiting_for_artist'):
-        artist_name = update.message.text
-        context.user_data['artist_name'] = artist_name
-        context.user_data['waiting_for_artist'] = False
-        await update.message.reply_text(f"✅ تم تعيين اسم المغني: {artist_name}\nأرسل الملف الآن:")
+    # التحقق من وجود ملف
+    if "file_path" not in context.user_data:
+        await update.message.reply_text("❌ أرسل ملف أولاً")
         return
     
-    # إذا كان في ملف بانتظار اسم الأغنية
-    if "file_path" in context.user_data:
-        file_path = context.user_data["file_path"]
-        new_title = update.message.text
-        artist_name = context.user_data.get('artist_name', DEFAULT_ARTIST)
+    file_path = context.user_data["file_path"]
+    current_step = context.user_data.get("step")
+    
+    # الخطوة 1: استلام اسم الاغنية
+    if current_step == "waiting_for_title":
+        song_title = update.message.text
+        context.user_data["song_title"] = song_title
+        context.user_data["step"] = "waiting_for_artist"  # ننتظر اسم المغني بعدين
+        await update.message.reply_text("✅ تم حفظ اسم الاغنية\n🎤 الآن أرسل اسم المغني:")
+    
+    # الخطوة 2: استلام اسم المغني وتعديل الملف
+    elif current_step == "waiting_for_artist":
+        artist_name = update.message.text
+        song_title = context.user_data.get("song_title", "غير معروف")
 
         try:
             # التحقق من وجود الملف
@@ -71,16 +118,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 audio = MP3(file_path)
                 audio.add_tags()
 
-            audio["title"] = new_title
+            audio["title"] = song_title
             audio["artist"] = artist_name
             audio.save()
 
             # إرسال الملف المعدل
+            await update.message.reply_text("⏳ جاري رفع الملف المعدل...")
+            
             with open(file_path, "rb") as f:
                 await update.message.reply_audio(
                     audio=f,
-                    title=new_title,
-                    performer=artist_name
+                    title=song_title,
+                    performer=artist_name,
+                    caption=f"✅ تم التعديل بنجاح\n🎵 {song_title} - {artist_name}"
                 )
 
             # تنظيف الملفات
@@ -90,25 +140,24 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.error(f"خطأ في تعديل الميتاداتا: {e}")
             await update.message.reply_text("❌ حدث خطأ في تعديل الملف")
-    else:
-        await update.message.reply_text("❌ أرسل ملف أولاً")
-
-# باقي الدوال (handle_audio, handle_video) نفس ما هي...
 
 def main():
     if not TOKEN:
-        logging.error("لم يتم تعيين TOKEN في متغيرات البيئة")
+        logging.error("لم يتم تعيين BOT_TOKEN في متغيرات البيئة")
         return
 
+    # إنشاء التطبيق
     app = Application.builder().token(TOKEN).build()
 
+    # إضافة المعالجات
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.AUDIO, handle_audio))
     app.add_handler(MessageHandler(filters.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     logging.info("✅ البوت بدأ العمل...")
+
+    # بدء البوت
     app.run_polling()
 
 if __name__ == "__main__":
