@@ -3,16 +3,34 @@ import sqlite3
 import logging
 from telegram.ext import ContextTypes
 
+# الإعدادات الأساسية
 DB_FILE = "bot_stats.db"
 MAX_FILE_SIZE = 70 * 1024 * 1024
 DEFAULT_AUDIO_QUALITY = "192k"
-processing_now = 0
-queue = []
 COVER_CACHE = "channel_cover_cached.jpg"
 CHANNEL_USERNAME = "THTOMI"
 
-# دالة لتهيئة قاعدة البيانات عند التشغيل
+# --- إضافة نظام الصيانة ---
+MAINTENANCE_MODE = False  # اجعلها True لتفعيل وضع الصيانة يدوياً
+
+async def is_maintenance(update, context):
+    """التحقق مما إذا كان البوت في وضع الصيانة"""
+    if MAINTENANCE_MODE:
+        OWNER_ID = 8460454874 
+        # السماح للمالك فقط بتجاوز وضع الصيانة
+        if update.effective_user.id == OWNER_ID:
+            return False
+        
+        await update.effective_message.reply_text(
+            "⚠️ **عذراً، البート في وضع الصيانة حالياً!**\n\n"
+            "نحن نقوم ببعض التحديثات والتحسينات، سنعود للعمل قريباً جداً. 🛠️"
+        )
+        return True
+    return False
+# -------------------------
+
 def init_db():
+    """تهيئة قاعدة البيانات"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users 
@@ -22,9 +40,11 @@ def init_db():
     conn.commit()
     conn.close()
 
+# تنفيذ تهيئة القاعدة عند استيراد الملف
 init_db()
 
 async def auto_clear_cache():
+    """تنظيف الملفات المؤقتة"""
     for file in os.listdir():
         if file.endswith(".mp3") or file.startswith("input_") or file.startswith("output_"):
             try:
@@ -34,6 +54,7 @@ async def auto_clear_cache():
     logging.info("🧹 تم تنظيف الملفات المؤقتة")
 
 async def check_subscription(user_id, context: ContextTypes.DEFAULT_TYPE):
+    """التحقق من اشتراك المستخدم في القناة"""
     try:
         member = await context.bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
         return member.status not in ["left", "kicked"]
@@ -42,6 +63,7 @@ async def check_subscription(user_id, context: ContextTypes.DEFAULT_TYPE):
         return False
 
 async def get_channel_cover(context: ContextTypes.DEFAULT_TYPE):
+    """جلب صورة غلاف القناة"""
     if os.path.exists(COVER_CACHE):
         return COVER_CACHE
     try:
