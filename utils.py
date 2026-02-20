@@ -10,27 +10,14 @@ DEFAULT_AUDIO_QUALITY = "192k"
 COVER_CACHE = "channel_cover_cached.jpg"
 CHANNEL_USERNAME = "THTOMI"
 
-# --- إضافة نظام الصيانة ---
-MAINTENANCE_MODE = False  # اجعلها True لتفعيل وضع الصيانة يدوياً
+# ايدي المالك - هذا هو السطر الذي كان ينقصك
+OWNER_ID = 8460454874 
 
-async def is_maintenance(update, context):
-    """التحقق مما إذا كان البوت في وضع الصيانة"""
-    if MAINTENANCE_MODE:
-        OWNER_ID = 8460454874 
-        # السماح للمالك فقط بتجاوز وضع الصيانة
-        if update.effective_user.id == OWNER_ID:
-            return False
-        
-        await update.effective_message.reply_text(
-            "⚠️ **عذراً، البート في وضع الصيانة حالياً!**\n\n"
-            "نحن نقوم ببعض التحديثات والتحسينات، سنعود للعمل قريباً جداً. 🛠️"
-        )
-        return True
-    return False
-# -------------------------
+# وضع الصيانة
+MAINTENANCE_MODE = False 
 
 def init_db():
-    """تهيئة قاعدة البيانات"""
+    """تهيئة قاعدة البيانات عند التشغيل"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users 
@@ -40,11 +27,24 @@ def init_db():
     conn.commit()
     conn.close()
 
-# تنفيذ تهيئة القاعدة عند استيراد الملف
+# تنفيذ إنشاء الجداول تلقائياً
 init_db()
 
+async def is_maintenance(update, context):
+    """التحقق من وضع الصيانة"""
+    if MAINTENANCE_MODE:
+        if update.effective_user.id == OWNER_ID:
+            return False
+        
+        await update.effective_message.reply_text(
+            "⚠️ **عذراً، البوت في وضع الصيانة حالياً!**\n\n"
+            "نحن نقوم ببعض التحديثات، سنعود للعمل قريباً. 🛠️"
+        )
+        return True
+    return False
+
 async def auto_clear_cache():
-    """تنظيف الملفات المؤقتة"""
+    """تنظيف الملفات المؤقتة من السيرفر"""
     for file in os.listdir():
         if file.endswith(".mp3") or file.startswith("input_") or file.startswith("output_"):
             try:
@@ -54,7 +54,7 @@ async def auto_clear_cache():
     logging.info("🧹 تم تنظيف الملفات المؤقتة")
 
 async def check_subscription(user_id, context: ContextTypes.DEFAULT_TYPE):
-    """التحقق من اشتراك المستخدم في القناة"""
+    """التحقق من الاشتراك في القناة"""
     try:
         member = await context.bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
         return member.status not in ["left", "kicked"]
@@ -63,7 +63,7 @@ async def check_subscription(user_id, context: ContextTypes.DEFAULT_TYPE):
         return False
 
 async def get_channel_cover(context: ContextTypes.DEFAULT_TYPE):
-    """جلب صورة غلاف القناة"""
+    """جلب صورة القناة لاستخدامها كغلاف للأغاني"""
     if os.path.exists(COVER_CACHE):
         return COVER_CACHE
     try:
