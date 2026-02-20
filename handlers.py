@@ -1,162 +1,48 @@
 import os
-import subprocess
-import sqlite3
+import asyncio
 import logging
-from datetime import datetime
-from telegram import Update
-from telegram.ext import ContextTypes
-from mutagen.id3 import ID3, TIT2, TPE1, APIC
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 
-from utils import check_subscription, get_channel_cover, auto_clear_cache, DB_FILE, MAX_FILE_SIZE, DEFAULT_AUDIO_QUALITY, processing_now, queue
-from keyboards import quality_keyboard
+from handlers import start_handler, media_handler, text_handler, panel_handler, quality_command_handler
+from keyboards import button_handler
+from utils import auto_clear_cache
 
-async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
-    user_id = user.id
+# إعداد التسجيل لرؤية الأخطاء في التيرمينال
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-    if not await check_subscription(user_id, context):
-        await update.message.reply_text("⚠️ يجب الاشتراك في القناة أولاً")
+TOKEN = os.environ.get("BOT_TOKEN")
+
+def main():
+    if not TOKEN:
+        print("❌ خطأ: لم يتم العثور على BOT_TOKEN في متغيرات البيئة!")
         return
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO users(user_id, first_name) VALUES (?, ?)", (user_id, user.first_name))
-    conn.commit()
-    conn.close()
+    app = Application.builder().token(TOKEN).build()
 
-    context.user_data["audio_quality"] = DEFAULT_AUDIO_QUALITY
+    # تنظيف الكاش كل 10 دقائق
+    if app.job_queue:
+        app.job_queue.run_repeating(lambda _: asyncio.create_task(auto_clear_cache()), interval=600, first=10)
 
-    await update.message.reply_text(f"""
-🎵 مرحباً {user.first_name}!
-🎧 أرسل ملف صوت أو فيديو وسيتم تعديل الاسم والفنان تلقائياً.
-🎚 للتحكم في جودة الصوت اضغط /quality
-""")
+    # الترتيب مهم جداً هنا:
+    # 1. الأوامر أولاً
+    app.add_handler(CommandHandler("start", start_handler))
+    app.add_handler(CommandHandler("panel", panel_handler))
+    app.add_handler(CommandHandler("quality", quality_command_handler))
+    
+    # 2. الأزرار التفاعلية
+    app.add_handler(CallbackQueryHandler(button_handler))
 
-# لوحة تحكم المالك
-async def panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    OWNER_ID = 8460454874
-    global processing_now, queue
+    # 3. الملفات (صوت، فيديو، مستندات)
+    app.add_handler(MessageHandler(filters.AUDIO | filters.VIDEO | filters.Document.ALL, media_handler))
 
-    if update.message.from_user.id != OWNER_ID:
-        return
+    # 4. النصوص العامة (يجب أن تكون بعد الأوامر لكي لا تخطف الـ /start)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM users")
-    total_users = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM files")
-    total_files = c.fetchone()[0]
-    conn.close()
+    print("🤖 Bot is running perfectly...")
+    app.run_polling()
 
-    await update.message.reply_text(f"""
-📊 لوحة التحكم
-
-👥 عدد المستخدمين: {total_users}
-📁 عدد الملفات المعالجة: {total_files}
-⚙ المعالجة الحالية: {processing_now}
-⏳ في الطابور: {len(queue)}
-""")
-
-# التعامل مع الملفات (صوت/فيديو)
-async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global processing_now, queue
-    user_id = update.message.from_user.id
-
-    if not await check_subscription(user_id, context):
-        await update.message.reply_text("⚠️ اشترك بالقناة أولاً")
-        return
-
-    if processing_now >= 3:
-        queue.append(update)
-        await update.message.reply_text("⏳ يوجد ضغط عالي، تم إدخالك في الطابور...")
-        return
-
-    processing_now += 1
-    file = None
-    size = 0
-    if update.message.audio:
-        file = await update.message.audio.get_file()
-        size = update.message.audio.file_size
-    elif update.message.video:
-        file = await update.message.video.get_file()
-        size = update.message.video.file_size
-    elif update.message.document:
-        file = await update.message.document.get_file()
-        size = update.message.document.file_size
-
-    if not file or size > MAX_FILE_SIZE:
-        await update.message.reply_text("❌ فشل التحميل أو تجاوز الحد 70MB")
-        processing_now -= 1
-        return
-
-    input_path = f"input_{user_id}"
-    output_path = f"output_{user_id}.mp3"
-    await file.download_to_drive(input_path)
-    await update.message.reply_text("⏳ جاري التحويل...")
-
-    audio_quality = context.user_data.get("audio_quality", DEFAULT_AUDIO_QUALITY)
-    result = subprocess.run([
-        "ffmpeg", "-i", input_path, "-vn", "-map_metadata", "-1",
-        "-ac", "2", "-b:a", audio_quality, "-preset", "ultrafast", "-threads", "2",
-        output_path, "-y"
-    ], capture_output=True)
-    os.remove(input_path)
-
-    if result.returncode != 0:
-        await update.message.reply_text("❌ فشل التحويل")
-        processing_now -= 1
-        return
-
-    context.user_data["file_path"] = output_path
-    context.user_data["step"] = "title"
-    await update.message.reply_text("📝 ارسل اسم الأغنية:")
-
-# التعامل مع النصوص (عنوان وفنان)
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global processing_now, queue
-    if "file_path" not in context.user_data:
-        return
-
-    file_path = context.user_data["file_path"]
-    step = context.user_data.get("step")
-    user_id = update.message.from_user.id
-
-    if step == "title":
-        context.user_data["title"] = update.message.text
-        context.user_data["step"] = "artist"
-        await update.message.reply_text("🎤 ارسل اسم المغني:")
-        return
-
-    if step == "artist":
-        title = context.user_data["title"]
-        artist = update.message.text
-        try:
-            audio = ID3(file_path)
-        except:
-            audio = ID3()
-        audio["TIT2"] = TIT2(encoding=3, text=title)
-        audio["TPE1"] = TPE1(encoding=3, text=artist)
-
-        cover_path = await get_channel_cover(context)
-        if cover_path and os.path.exists(cover_path):
-            with open(cover_path, "rb") as img:
-                audio["APIC"] = APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover", data=img.read())
-        audio.save(file_path)
-
-        with open(file_path, "rb") as f:
-            await update.message.reply_audio(audio=f, title=title, performer=artist)
-
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("INSERT INTO files(user_id, title, artist, date) VALUES (?, ?, ?, ?)",
-                  (user_id, title, artist, datetime.now()))
-        conn.commit()
-        conn.close()
-
-        os.remove(file_path)
-        context.user_data.clear()
-        processing_now -= 1
-
-        if queue:
-            next_update = queue.pop(0)
-            await media_handler(next_update, context)
+if __name__ == "__main__":
+    main()
