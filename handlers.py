@@ -2,19 +2,25 @@ import os
 import subprocess
 import sqlite3
 import logging
+import asyncio
 from datetime import datetime
 from telegram import Update
 from telegram.ext import ContextTypes
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 
-from utils import check_subscription, get_channel_cover, DB_FILE, MAX_FILE_SIZE, DEFAULT_AUDIO_QUALITY
-from keyboards import quality_keyboard
+# استيراد الأدوات المساعدة
+from utils import check_subscription, get_channel_cover, DB_FILE, MAX_FILE_SIZE, DEFAULT_AUDIO_QUALITY, is_maintenance
 
-# متغيرات عالمية بسيطة (للتوضيح)
+# تعريف الايدي الخاص بالمالك (تأكد من مطابقته لما في admin_panel)
+OWNER_ID = 8460454874 
+
+# متغيرات عالمية مؤقتة للتحكم في الضغط
 processing_now = 0
 queue = []
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await is_maintenance(update, context): return
+    
     user = update.message.from_user
     if not await check_subscription(user.id, context):
         await update.message.reply_text(f"⚠️ يجب الاشتراك في القناة أولاً: @THTOMI")
@@ -26,7 +32,6 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-    context.user_data["audio_quality"] = DEFAULT_AUDIO_QUALITY
     await update.message.reply_text(
         f"🎵 مرحباً {user.first_name}!\n"
         f"🎧 أرسل ملف صوت أو فيديو وسيتم تعديل الاسم والفنان تلقائياً.\n"
@@ -34,30 +39,13 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def quality_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await is_maintenance(update, context): return
+    from keyboards import quality_keyboard
     await update.message.reply_text("اختر جودة الصوت المطلوبة:", reply_markup=quality_keyboard())
 
-async def panel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    OWNER_ID = 8460454874 # تأكد من رقم الايدي الخاص بك
-    if update.message.from_user.id != OWNER_ID:
-        return
-
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM users")
-    total_users = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM files")
-    total_files = c.fetchone()[0]
-    conn.close()
-
-    await update.message.reply_text(
-        f"📊 لوحة التحكم\n\n"
-        f"👥 عدد المستخدمين: {total_users}\n"
-        f"📁 عدد الملفات المعالجة: {total_files}\n"
-        f"⚙ المعالجة الحالية: {processing_now}\n"
-        f"⏳ في الطابور: {len(queue)}"
-    )
-
 async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await is_maintenance(update, context): return
+    
     global processing_now
     user_id = update.message.from_user.id
 
@@ -72,14 +60,7 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     processing_now += 1
     
-    file_obj = None
-    if update.message.audio:
-        file_obj = update.message.audio
-    elif update.message.video:
-        file_obj = update.message.video
-    elif update.message.document:
-        file_obj = update.message.document
-
+    file_obj = update.message.audio or update.message.video or update.message.document
     if not file_obj or file_obj.file_size > MAX_FILE_SIZE:
         await update.message.reply_text("❌ فشل التحميل أو تجاوز الحد 70MB")
         processing_now -= 1
@@ -92,10 +73,8 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     output_path = f"output_{user_id}_{file_obj.file_id[:5]}.mp3"
     
     await tg_file.download_to_drive(input_path)
-
     audio_quality = context.user_data.get("audio_quality", DEFAULT_AUDIO_QUALITY)
     
-    # تشغيل ffmpeg
     process = subprocess.run([
         "ffmpeg", "-i", input_path, "-vn", "-acodec", "libmp3lame",
         "-ac", "2", "-b:a", audio_quality, output_path, "-y"
@@ -104,7 +83,7 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if os.path.exists(input_path): os.remove(input_path)
 
     if process.returncode != 0:
-        await wait_msg.edit_text("❌ فشل التحويل عبر FFmpeg")
+        await wait_msg.edit_text("❌ فشل التحويل")
         processing_now -= 1
         return
 
@@ -113,13 +92,36 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await wait_msg.edit_text("📝 تم التحويل! الآن أرسل اسم الأغنية (Title):")
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global processing_now
+    user_id = update.effective_user.id
+
+    # 1. ميزة الإذاعة للمالك (تُفحص أولاً)
+    if context.user_data.get('admin_step') == 'broadcasting' and user_id == OWNER_ID:
+        msg = update.message.text
+        conn = sqlite3.connect(DB_FILE)
+        users = conn.execute("SELECT user_id FROM users").fetchall()
+        conn.close()
+        
+        count = 0
+        status_msg = await update.message.reply_text(f"🚀 جاري الإذاعة لـ {len(users)} مستخدم...")
+        
+        for user in users:
+            try:
+                await context.bot.send_message(chat_id=user[0], text=msg)
+                count += 1
+                await asyncio.sleep(0.05) # حماية من الـ Flood
+            except Exception:
+                continue
+        
+        await status_msg.edit_text(f"✅ تم الانتهاء! استلم الرسالة {count} مستخدم بنجاح.")
+        context.user_data['admin_step'] = None
+        return
+
+    # 2. منطق تعديل الميتادات (العنوان والفنان)
     if "file_path" not in context.user_data:
-        return # تجاهل النصوص العادية إذا لم يكن هناك ملف قيد المعالجة
+        return 
 
     file_path = context.user_data["file_path"]
     step = context.user_data.get("step")
-    user_id = update.message.from_user.id
 
     if step == "title":
         context.user_data["title"] = update.message.text
@@ -131,7 +133,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title = context.user_data["title"]
         artist = update.message.text
         
-        # تعديل الميتادات
         try:
             audio = ID3(file_path)
         except:
@@ -149,7 +150,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(file_path, "rb") as f:
             await update.message.reply_audio(audio=f, title=title, performer=artist)
 
-        # حفظ الإحصائيات
+        # حفظ إحصائيات الملف في قاعدة البيانات
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("INSERT INTO files(user_id, title, artist, date) VALUES (?, ?, ?, ?)",
@@ -159,9 +160,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if os.path.exists(file_path): os.remove(file_path)
         context.user_data.clear()
+        
+        global processing_now
         processing_now -= 1
         
-        # معالجة الملف التالي في الطابور إذا وجد
+        # معالجة الملف التالي في الطابور
         if queue:
             next_update = queue.pop(0)
             await media_handler(next_update, context)
