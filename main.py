@@ -1,241 +1,175 @@
 import os
 import subprocess
 import logging
-import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from mutagen.easyid3 import EasyID3
-from mutagen.mp3 import MP3
+from mutagen.id3 import ID3, TIT2, TPE1, APIC
 
-# إعداد التسجيل
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO)
 
-# قراءة التوكن من Environment Variable
 TOKEN = os.environ.get("BOT_TOKEN")
+CHANNEL_USERNAME = "THTOMI"
+MAX_FILE_SIZE = 70 * 1024 * 1024  # 70MB
 
-# إعدادات الاشتراك الإجباري
-CHANNEL_USERNAME = "THTOMI"  # معرف القناة (بدون @)
-CHANNEL_LINK = "https://t.me/THTOMI"
+COVER_CACHE = "channel_cover_cached.jpg"
 
-# التحقق من وجود ffmpeg
-def check_ffmpeg():
+
+async def check_subscription(user_id, context):
     try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
-        return True
+        member = await context.bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
+        return member.status not in ["left", "kicked"]
     except:
         return False
 
-async def check_subscription(user_id, context):
-    """التحقق من اشتراك المستخدم في القناة"""
+
+async def get_channel_cover(context):
+    # إذا موجود بالكاش لا تحمله مرة ثانية
+    if os.path.exists(COVER_CACHE):
+        return COVER_CACHE
+
     try:
-        member = await context.bot.get_chat_member(chat_id=f"@{CHANNEL_USERNAME}", user_id=user_id)
-        return member.status not in ['left', 'kicked']
+        chat = await context.bot.get_chat(f"@{CHANNEL_USERNAME}")
+        if chat.photo:
+            photo = await context.bot.get_file(chat.photo.big_file_id)
+            await photo.download_to_drive(COVER_CACHE)
+            return COVER_CACHE
     except Exception as e:
-        logging.error(f"خطأ في التحقق من الاشتراك: {e}")
-        return False
+        logging.error(f"خطأ جلب صورة القناة: {e}")
+
+    return None
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    
-    # التحقق من الاشتراك
-    is_subscribed = await check_subscription(user_id, context)
-    
-    if not is_subscribed:
-        await update.message.reply_text(
-            f"⚠️ *عذراً، يجب الاشتراك في القناة أولاً*\n\n"
-            f"🔗 [{CHANNEL_USERNAME}]({CHANNEL_LINK})\n\n"
-            f"✅ بعد الاشتراك، أرسل /start مرة أخرى",
-            parse_mode='Markdown',
-            disable_web_page_preview=True
-        )
+    if not await check_subscription(update.message.from_user.id, context):
+        await update.message.reply_text("⚠️ يجب الاشتراك في القناة أولاً")
         return
-    
-    await update.message.reply_text(
-        "🎵 *بوت تعديل الميتاداتا*\n\n"
-        "✅ تم التحقق من اشتراكك في القناة\n"
-        "ارسل ملف MP3 او فيديو 🎵📹\n"
-        "وسأطلب منك اسم الاغنية ثم اسم المغني بالترتيب.",
-        parse_mode='Markdown'
-    )
 
-async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    
-    # التحقق من الاشتراك
-    is_subscribed = await check_subscription(user_id, context)
-    
-    if not is_subscribed:
-        await update.message.reply_text(
-            f"⚠️ *عذراً، يجب الاشتراك في القناة أولاً*\n\n"
-            f"🔗 [{CHANNEL_USERNAME}]({CHANNEL_LINK})\n\n"
-            f"✅ بعد الاشتراك، أرسل /start مرة أخرى",
-            parse_mode='Markdown',
-            disable_web_page_preview=True
-        )
+    await update.message.reply_text("🎵 ارسل ملف صوت او فيديو (حد اقصى 70MB)")
+
+
+async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_subscription(update.message.from_user.id, context):
+        await update.message.reply_text("⚠️ اشترك بالقناة أولاً")
         return
-    
-    try:
+
+    file = None
+    size = 0
+
+    if update.message.audio:
         file = await update.message.audio.get_file()
-        file_path = f"input_{update.message.from_user.id}.mp3"
-        await file.download_to_drive(file_path)
-
-        context.user_data["file_path"] = file_path
-        context.user_data["file_type"] = "audio"
-        context.user_data["step"] = "waiting_for_title"  # ننتظر اسم الاغنية أولاً
-        
-        await update.message.reply_text("✅ تم استلام الملف\n📝 أرسل اسم الاغنية:")
-    except Exception as e:
-        logging.error(f"خطأ في معالجة الصوت: {e}")
-        await update.message.reply_text("❌ حدث خطأ في معالجة الملف")
-
-async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    
-    # التحقق من الاشتراك
-    is_subscribed = await check_subscription(user_id, context)
-    
-    if not is_subscribed:
-        await update.message.reply_text(
-            f"⚠️ *عذراً، يجب الاشتراك في القناة أولاً*\n\n"
-            f"🔗 [{CHANNEL_USERNAME}]({CHANNEL_LINK})\n\n"
-            f"✅ بعد الاشتراك، أرسل /start مرة أخرى",
-            parse_mode='Markdown',
-            disable_web_page_preview=True
-        )
-        return
-    
-    if not check_ffmpeg():
-        await update.message.reply_text("❌ استخراج الصوت من الفيديو غير متاح حالياً")
-        return
-
-    try:
+        size = update.message.audio.file_size
+    elif update.message.video:
         file = await update.message.video.get_file()
-        video_path = f"input_video_{update.message.from_user.id}.mp4"
-        audio_path = f"extracted_{update.message.from_user.id}.mp3"
+        size = update.message.video.file_size
+    elif update.message.document:
+        file = await update.message.document.get_file()
+        size = update.message.document.file_size
 
-        await file.download_to_drive(video_path)
-        
-        # رسالة انتظار
-        await update.message.reply_text("⏳ جاري استخراج الصوت من الفيديو...")
+    if not file:
+        return
 
-        # استخراج الصوت من الفيديو
-        result = subprocess.run([
-            "ffmpeg", "-i", video_path,
-            "-q:a", "0", "-map", "a",
-            audio_path, "-y"
-        ], capture_output=True, text=True)
+    if size > MAX_FILE_SIZE:
+        await update.message.reply_text("❌ الحد الأقصى 70MB")
+        return
 
-        if result.returncode != 0:
-            raise Exception(f"FFmpeg error: {result.stderr}")
+    input_path = f"input_{update.message.from_user.id}"
+    output_path = f"output_{update.message.from_user.id}.mp3"
 
-        os.remove(video_path)
+    await file.download_to_drive(input_path)
 
-        context.user_data["file_path"] = audio_path
-        context.user_data["file_type"] = "video"
-        context.user_data["step"] = "waiting_for_title"  # ننتظر اسم الاغنية أولاً
-        
-        await update.message.reply_text("✅ تم استخراج الصوت\n📝 أرسل اسم الاغنية:")
-        
-    except Exception as e:
-        logging.error(f"خطأ في معالجة الفيديو: {e}")
-        await update.message.reply_text("❌ حدث خطأ في معالجة الفيديو")
+    await update.message.reply_text("⏳ جاري التحويل...")
+
+    result = subprocess.run([
+        "ffmpeg", "-i", input_path,
+        "-vn",
+        "-ar", "44100",
+        "-ac", "2",
+        "-b:a", "192k",
+        output_path,
+        "-y"
+    ], capture_output=True)
+
+    os.remove(input_path)
+
+    if result.returncode != 0:
+        await update.message.reply_text("❌ فشل التحويل")
+        return
+
+    context.user_data["file_path"] = output_path
+    context.user_data["step"] = "title"
+
+    await update.message.reply_text("📝 ارسل اسم الاغنية:")
+
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    
-    # التحقق من الاشتراك
-    is_subscribed = await check_subscription(user_id, context)
-    
-    if not is_subscribed:
-        await update.message.reply_text(
-            f"⚠️ *عذراً، يجب الاشتراك في القناة أولاً*\n\n"
-            f"🔗 [{CHANNEL_USERNAME}]({CHANNEL_LINK})\n\n"
-            f"✅ بعد الاشتراك، أرسل /start مرة أخرى",
-            parse_mode='Markdown',
-            disable_web_page_preview=True
-        )
-        return
-    
-    # التحقق من وجود ملف
     if "file_path" not in context.user_data:
-        await update.message.reply_text("❌ أرسل ملف أولاً")
         return
-    
+
     file_path = context.user_data["file_path"]
-    current_step = context.user_data.get("step")
-    
-    # الخطوة 1: استلام اسم الاغنية
-    if current_step == "waiting_for_title":
-        song_title = update.message.text
-        context.user_data["song_title"] = song_title
-        context.user_data["step"] = "waiting_for_artist"  # ننتظر اسم المغني بعدين
-        await update.message.reply_text("✅ تم حفظ اسم الاغنية\n🎤 الآن أرسل اسم المغني:")
-    
-    # الخطوة 2: استلام اسم المغني وتعديل الملف
-    elif current_step == "waiting_for_artist":
-        artist_name = update.message.text
-        song_title = context.user_data.get("song_title", "غير معروف")
+    step = context.user_data.get("step")
+
+    if step == "title":
+        context.user_data["title"] = update.message.text
+        context.user_data["step"] = "artist"
+        await update.message.reply_text("🎤 ارسل اسم المغني:")
+        return
+
+    if step == "artist":
+        title = context.user_data["title"]
+        artist = update.message.text
 
         try:
-            # التحقق من وجود الملف
-            if not os.path.exists(file_path):
-                await update.message.reply_text("❌ الملف غير موجود")
-                return
-
-            # تعديل الميتاداتا
             try:
-                audio = MP3(file_path, ID3=EasyID3)
+                audio = ID3(file_path)
             except:
-                audio = MP3(file_path)
-                audio.add_tags()
+                audio = ID3()
 
-            audio["title"] = song_title
-            audio["artist"] = artist_name
-            audio.save()
+            audio["TIT2"] = TIT2(encoding=3, text=title)
+            audio["TPE1"] = TPE1(encoding=3, text=artist)
 
-            # إرسال الملف المعدل
-            await update.message.reply_text("⏳ جاري رفع الملف المعدل...")
-            
+            # جلب صورة القناة من الكاش أو تحميلها
+            cover_path = await get_channel_cover(context)
+
+            if cover_path and os.path.exists(cover_path):
+                with open(cover_path, "rb") as img:
+                    audio["APIC"] = APIC(
+                        encoding=3,
+                        mime="image/jpeg",
+                        type=3,
+                        desc="Cover",
+                        data=img.read()
+                    )
+
+            audio.save(file_path)
+
             with open(file_path, "rb") as f:
                 await update.message.reply_audio(
                     audio=f,
-                    title=song_title,
-                    performer=artist_name,
-                    caption=f"✅ تم التعديل بنجاح\n🎵 {song_title} - {artist_name}\n\n🔗 اشترك في قناتنا: {CHANNEL_LINK}"
+                    title=title,
+                    performer=artist
                 )
 
-            # تنظيف الملفات
             os.remove(file_path)
             context.user_data.clear()
-            
+
         except Exception as e:
-            logging.error(f"خطأ في تعديل الميتاداتا: {e}")
-            await update.message.reply_text("❌ حدث خطأ في تعديل الملف")
+            logging.error(e)
+            await update.message.reply_text("❌ حدث خطأ أثناء التعديل")
+
 
 def main():
-    if not TOKEN:
-        logging.error("لم يتم تعيين BOT_TOKEN في متغيرات البيئة")
-        return
-
-    # إنشاء التطبيق
     app = Application.builder().token(TOKEN).build()
 
-    # إضافة المعالجات
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.AUDIO, handle_audio))
-    app.add_handler(MessageHandler(filters.VIDEO, handle_video))
+    app.add_handler(MessageHandler(
+        filters.AUDIO | filters.VIDEO | filters.Document.ALL,
+        handle_media
+    ))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    logging.info("✅ البوت بدأ العمل...")
-
-    # بدء البوت
+    print("Bot Running...")
     app.run_polling()
 
+
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        logging.error(f"خطأ عام: {e}")
+    main()
