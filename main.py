@@ -2,6 +2,8 @@ import os
 import subprocess
 import logging
 import sqlite3
+import asyncio
+from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
@@ -13,8 +15,9 @@ TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_USERNAME = "THTOMI"
 MAX_FILE_SIZE = 70 * 1024 * 1024  # 70MB
 MAX_CONCURRENT = 3
-OWNER_ID = 123456789  # حط ايديك هنا
+OWNER_ID = 123456789
 COVER_CACHE = "channel_cover_cached.jpg"
+DEFAULT_AUDIO_QUALITY = "192k"
 
 # ====== قاعدة بيانات SQLite ======
 DB_FILE = "bot_stats.db"
@@ -30,7 +33,8 @@ def init_db():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
                     title TEXT,
-                    artist TEXT
+                    artist TEXT,
+                    date TIMESTAMP
                 )''')
     conn.commit()
     conn.close()
@@ -40,6 +44,15 @@ init_db()
 # ====== متغيرات التشغيل ======
 processing_now = 0
 queue = []
+
+# ====== تنظيف الكاش تلقائياً كل 10 دقائق ======
+async def auto_clear_cache():
+    while True:
+        await asyncio.sleep(600)  # 10 دقائق
+        for file in os.listdir():
+            if file.endswith(".mp3"):
+                os.remove(file)
+        logging.info("🧹 تم تنظيف الملفات المؤقتة تلقائياً")
 
 # ====== التحقق من الاشتراك ======
 async def check_subscription(user_id, context):
@@ -63,16 +76,15 @@ async def get_channel_cover(context):
         logging.error(f"خطأ جلب صورة القناة: {e}")
     return None
 
-# ====== رسالة ترحيب احترافية ======
+# ====== رسالة ترحيب ======
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
     user_id = user.id
 
     if not await check_subscription(user_id, context):
-        await update.message.reply_text("⚠️ يجب الاشتراك في القناة أولاً للمتابعة.")
+        await update.message.reply_text("⚠️ يجب الاشتراك في القناة أولاً")
         return
 
-    # تسجيل المستخدم في قاعدة البيانات
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("INSERT OR IGNORE INTO users(user_id, first_name) VALUES (?, ?)", (user_id, user.first_name))
@@ -90,17 +102,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ━━━━━━━━━━━━━━
 
 🎧 أرسل ملف صوت أو فيديو
-وسأقوم بتحويله وإضافة:
-✔ اسم الأغنية
-✔ اسم المغني
-✔ صورة القناة تلقائياً
-
-🚀 سرعة معالجة عالية
-🛡 حماية متقدمة
+✔ سيتم تعديل الاسم والفنان
+✔ إضافة صورة القناة تلقائياً
+✔ سرعة معالجة عالية
+✔ تنظيف تلقائي للكاش كل 10 دقائق
 """)
 
 
-# ====== لوحة التحكم + إشعارات الضغط ======
+# ====== لوحة التحكم ======
 async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != OWNER_ID:
         return
@@ -117,13 +126,28 @@ async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 لوحة التحكم
 
 👥 عدد المستخدمين: {total_users}
-📁 الملفات المعالجة: {total_files}
+📁 عدد الملفات المعالجة: {total_files}
 ⚙ المعالجة الحالية: {processing_now}
 ⏳ في الطابور: {len(queue)}
 """)
 
+# ====== تقرير آخر 10 ملفات ======
+async def last_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != OWNER_ID:
+        return
 
-# ====== تنظيف الملفات المؤقتة ======
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT user_id, title, artist, date FROM files ORDER BY id DESC LIMIT 10")
+    rows = c.fetchall()
+    conn.close()
+
+    msg = "📋 آخر 10 ملفات معالجة:\n"
+    for r in rows:
+        msg += f"👤 {r[0]} | 🎵 {r[1]} | 🎤 {r[2]} | ⏱ {r[3]}\n"
+    await update.message.reply_text(msg)
+
+# ====== تنظيف الكاش يدوياً ======
 async def clear_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != OWNER_ID:
         return
@@ -132,8 +156,7 @@ async def clear_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(file)
     await update.message.reply_text("🧹 تم تنظيف الملفات المؤقتة")
 
-
-# ====== التعامل مع الملفات + طابور ======
+# ====== التعامل مع الملفات ======
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global processing_now, queue
 
@@ -143,13 +166,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ اشترك بالقناة أولاً")
         return
 
-    # نظام الطابور
     if processing_now >= MAX_CONCURRENT:
         queue.append(update)
         await update.message.reply_text("⏳ يوجد ضغط عالي، تم إدخالك في الطابور...")
-        # إشعار للمالك
-        if len(queue) >= 3:
-            await context.bot.send_message(OWNER_ID, f"⚠️ ضغط عالي! {len(queue)} مستخدمين في الطابور")
         return
 
     processing_now += 1
@@ -187,7 +206,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "-vn",
         "-map_metadata", "-1",
         "-ac", "2",
-        "-b:a", "192k",
+        "-b:a", DEFAULT_AUDIO_QUALITY,
         "-preset", "ultrafast",
         "-threads", "2",
         output_path,
@@ -204,10 +223,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["step"] = "title"
     await update.message.reply_text("📝 ارسل اسم الأغنية:")
 
-
 # ====== التعامل مع النص ======
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global processing_now, queue, total_files_processed
+    global processing_now, queue
 
     if "file_path" not in context.user_data:
         return
@@ -258,16 +276,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # حفظ الملف في قاعدة البيانات
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
-            c.execute("INSERT INTO files(user_id, title, artist) VALUES (?, ?, ?)", (user_id, title, artist))
+            c.execute("INSERT INTO files(user_id, title, artist, date) VALUES (?, ?, ?, ?)",
+                      (user_id, title, artist, datetime.now()))
             conn.commit()
             conn.close()
 
             os.remove(file_path)
             context.user_data.clear()
-            total_files_processed += 1
             processing_now -= 1
 
-            # تشغيل المستخدم التالي في الطابور
             if queue:
                 next_update = queue.pop(0)
                 await handle_media(next_update, context)
@@ -280,18 +297,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 next_update = queue.pop(0)
                 await handle_media(next_update, context)
 
-
 # ====== تشغيل البوت ======
 def main():
     app = Application.builder().token(TOKEN).build()
 
+    asyncio.create_task(auto_clear_cache())
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("panel", panel))
     app.add_handler(CommandHandler("clear", clear_cache))
-    app.add_handler(MessageHandler(
-        filters.AUDIO | filters.VIDEO | filters.Document.ALL,
-        handle_media
-    ))
+    app.add_handler(CommandHandler("stats", last_files))
+    app.add_handler(MessageHandler(filters.AUDIO | filters.VIDEO | filters.Document.ALL, handle_media))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     print("Bot Running...")
