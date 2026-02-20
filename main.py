@@ -2,10 +2,12 @@ import os
 import subprocess
 import logging
 import sqlite3
-import asyncio
 from datetime import datetime
+import asyncio
+
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 
 logging.basicConfig(level=logging.INFO)
@@ -45,14 +47,12 @@ init_db()
 processing_now = 0
 queue = []
 
-# ====== تنظيف الكاش تلقائياً كل 10 دقائق ======
+# ====== تنظيف الكاش ======
 async def auto_clear_cache():
-    while True:
-        await asyncio.sleep(600)  # 10 دقائق
-        for file in os.listdir():
-            if file.endswith(".mp3"):
-                os.remove(file)
-        logging.info("🧹 تم تنظيف الملفات المؤقتة تلقائياً")
+    for file in os.listdir():
+        if file.endswith(".mp3"):
+            os.remove(file)
+    logging.info("🧹 تم تنظيف الملفات المؤقتة")
 
 # ====== التحقق من الاشتراك ======
 async def check_subscription(user_id, context):
@@ -69,7 +69,7 @@ async def get_channel_cover(context):
     try:
         chat = await context.bot.get_chat(f"@{CHANNEL_USERNAME}")
         if chat.photo:
-            photo = await context.bot.get_file(chat.photo.big_file_id)
+            photo = await chat.get_file(chat.photo.big_file_id)
             await photo.download_to_drive(COVER_CACHE)
             return COVER_CACHE
     except Exception as e:
@@ -91,6 +91,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
+    # تعيين الجودة الافتراضية لكل مستخدم
+    context.user_data["audio_quality"] = DEFAULT_AUDIO_QUALITY
+
     await update.message.reply_text(f"""
 🎵 مرحباً {user.first_name}!
 
@@ -99,6 +102,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ━━━━━━━━━━━━━━
 📦 الحد الأقصى للملف: 70MB
 ⏳ أقصى ملفات معالجة بنفس الوقت: 3
+🎚 يمكنك اختيار جودة الصوت: /quality 128k | 192k | 256k
 ━━━━━━━━━━━━━━
 
 🎧 أرسل ملف صوت أو فيديو
@@ -108,6 +112,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ✔ تنظيف تلقائي للكاش كل 10 دقائق
 """)
 
+# ====== تعيين جودة الصوت ======
+async def set_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    if len(context.args) != 1:
+        await update.message.reply_text("❌ استخدم: /quality 128k | 192k | 256k")
+        return
+
+    quality = context.args[0]
+    if quality not in ["128k", "192k", "256k"]:
+        await update.message.reply_text("❌ الجودة غير صالحة! اختر: 128k, 192k, 256k")
+        return
+
+    context.user_data["audio_quality"] = quality
+    await update.message.reply_text(f"✅ تم تعيين جودة الصوت: {quality}")
 
 # ====== لوحة التحكم ======
 async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -130,31 +148,6 @@ async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ⚙ المعالجة الحالية: {processing_now}
 ⏳ في الطابور: {len(queue)}
 """)
-
-# ====== تقرير آخر 10 ملفات ======
-async def last_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != OWNER_ID:
-        return
-
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT user_id, title, artist, date FROM files ORDER BY id DESC LIMIT 10")
-    rows = c.fetchall()
-    conn.close()
-
-    msg = "📋 آخر 10 ملفات معالجة:\n"
-    for r in rows:
-        msg += f"👤 {r[0]} | 🎵 {r[1]} | 🎤 {r[2]} | ⏱ {r[3]}\n"
-    await update.message.reply_text(msg)
-
-# ====== تنظيف الكاش يدوياً ======
-async def clear_cache(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != OWNER_ID:
-        return
-    for file in os.listdir():
-        if file.endswith(".mp3"):
-            os.remove(file)
-    await update.message.reply_text("🧹 تم تنظيف الملفات المؤقتة")
 
 # ====== التعامل مع الملفات ======
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -200,13 +193,15 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await file.download_to_drive(input_path)
     await update.message.reply_text("⏳ جاري التحويل...")
 
+    audio_quality = context.user_data.get("audio_quality", DEFAULT_AUDIO_QUALITY)
+
     result = subprocess.run([
         "ffmpeg",
         "-i", input_path,
         "-vn",
         "-map_metadata", "-1",
         "-ac", "2",
-        "-b:a", DEFAULT_AUDIO_QUALITY,
+        "-b:a", audio_quality,
         "-preset", "ultrafast",
         "-threads", "2",
         output_path,
@@ -273,7 +268,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     performer=artist
                 )
 
-            # حفظ الملف في قاعدة البيانات
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
             c.execute("INSERT INTO files(user_id, title, artist, date) VALUES (?, ?, ?, ?)",
@@ -298,21 +292,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await handle_media(next_update, context)
 
 # ====== تشغيل البوت ======
-def main():
+async def main():
     app = Application.builder().token(TOKEN).build()
 
-    asyncio.create_task(auto_clear_cache())
+    # شغل تنظيف الكاش كل 10 دقائق بشكل آمن
+    app.job_queue.run_repeating(lambda _: asyncio.create_task(auto_clear_cache()), interval=600, first=10)
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("quality", set_quality))
     app.add_handler(CommandHandler("panel", panel))
-    app.add_handler(CommandHandler("clear", clear_cache))
-    app.add_handler(CommandHandler("stats", last_files))
     app.add_handler(MessageHandler(filters.AUDIO | filters.VIDEO | filters.Document.ALL, handle_media))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     print("Bot Running...")
-    app.run_polling()
-
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
