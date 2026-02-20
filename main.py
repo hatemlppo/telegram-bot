@@ -7,7 +7,6 @@ import asyncio
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 
 logging.basicConfig(level=logging.INFO)
@@ -91,7 +90,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-    # تعيين الجودة الافتراضية لكل مستخدم
     context.user_data["audio_quality"] = DEFAULT_AUDIO_QUALITY
 
     await update.message.reply_text(f"""
@@ -114,7 +112,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ====== تعيين جودة الصوت ======
 async def set_quality(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
     if len(context.args) != 1:
         await update.message.reply_text("❌ استخدم: /quality 128k | 192k | 256k")
         return
@@ -292,7 +289,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await handle_media(next_update, context)
 
 # ====== تشغيل البوت ======
-async def main():
+def main():
     app = Application.builder().token(TOKEN).build()
 
     # شغل تنظيف الكاش كل 10 دقائق بشكل آمن
@@ -305,8 +302,7 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     print("Bot Running...")
-    await app.run_polling()
+    app.run_polling()
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
