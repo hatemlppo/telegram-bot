@@ -1,17 +1,26 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 
-# القائمة الرئيسية التي تظهر للمستخدم
+# القائمة الرئيسية
 def main_menu_keyboard():
     keyboard = [
         [KeyboardButton("🎵 تعديل الأغاني"), KeyboardButton("🎬 استخراج من الفيديو")],
-        [KeyboardButton("🖼️ أغنيتي (إضافة صورة مخصصة)")],  # زر جديد
+        [KeyboardButton("🖼️ أغنيتي (القائمة المتكاملة)")],  # زر واحد فقط
         [KeyboardButton("🔙 الرجوع إلى البداية")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# قائمة اختيار الجودة (Inline) تظهر بعد الضغط على التعديل
+# قائمة أغنيتي الداخلية (Inline)
+def my_song_menu_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("🎵 تعديل أغنية (اسم + صورة)", callback_data="mysong_edit")],
+        [InlineKeyboardButton("🎬 استخراج من فيديو + صورة", callback_data="mysong_extract")],
+        [InlineKeyboardButton("🆕 رفع ملف صوتي + صورة جديدة", callback_data="mysong_new")],
+        [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_action")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+# قائمة اختيار الجودة
 def quality_keyboard(action_type):
-    # action_type: لتحديد هل المستخدم اختار تعديل أغنية أم استخراج من فيديو
     keyboard = [
         [
             InlineKeyboardButton("128k", callback_data=f"q_128_{action_type}"),
@@ -22,7 +31,7 @@ def quality_keyboard(action_type):
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# لوحة تحكم الإدارة (خاصة بالمالك فقط)
+# لوحة تحكم الإدارة
 def admin_panel_keyboard(maintenance_status):
     m_text = "🔴 إيقاف الصيانة" if maintenance_status else "🟢 تفعيل الصيانة"
     keyboard = [
