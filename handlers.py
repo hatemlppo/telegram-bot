@@ -315,7 +315,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ لست في وضع إضافة صورة حالياً. اختر '🖼️ أغنيتي' أولاً.")
 
 # ============================================
-# معالج النصوص
+# معالج النصوص (معدل مع زر تشغيل البوت)
 # ============================================
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
@@ -343,18 +343,21 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ تمت الإذاعة بنجاح لـ {success_count} مستخدم.")
         return
 
-    # ===== أزرار القائمة الرئيسية =====
+    # ===== أزرار القائمة الرئيسية (معدلة مع زر تشغيل البوت) =====
+    
+    # زر تعديل الأغاني
     if user_text == "🎵 تعديل الأغاني":
         from keyboards import quality_keyboard
         await update.message.reply_text("اختر الجودة المطلوبة للتعديل:", reply_markup=quality_keyboard("edit"))
         return
     
+    # زر استخراج من الفيديو
     elif user_text == "🎬 استخراج من الفيديو":
         from keyboards import quality_keyboard
         await update.message.reply_text("اختر الجودة المطلوبة للاستخراج:", reply_markup=quality_keyboard("extract"))
         return
     
-    # زر أغنيتي - يظهر القائمة الداخلية
+    # زر أغنيتي (القائمة المتكاملة)
     elif user_text == "🖼️ أغنيتي (القائمة المتكاملة)":
         from keyboards import my_song_menu_keyboard
         await update.message.reply_text(
@@ -364,6 +367,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # ✅ زر تشغيل البوت (الجديد)
+    elif user_text == "▶️ تشغيل البوت":
+        await start_handler(update, context)  # نفس دالة البداية
+        return
+    
+    # زر الرجوع إلى البداية
     elif user_text == "🔙 الرجوع إلى البداية":
         await start_handler(update, context)
         return
@@ -390,8 +399,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # ملاحظة: لم نعد نتعامل مع الصور هنا لأن photo_handler هو من يتعامل معها
-        # إذا وصلنا هنا مع step = waiting_for_cover ولم تكن رسالة صورة، نخبر المستخدم
+        # إذا كان ينتظر صورة وأرسل نص
         elif step == 'waiting_for_cover':
             await update.message.reply_text("❌ أنا في انتظار صورة وليس نص. أرسل صورة من فضلك.")
             return
