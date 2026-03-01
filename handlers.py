@@ -231,6 +231,90 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await wait_msg.edit_text("📝 تمت المعالجة! الآن أرسل (اسم الأغنية) الجديد:")
 
 # ============================================
+# معالج الصور (مخصص لوضع أغنيتي)
+# ============================================
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة الصور المرسلة من المستخدم"""
+    if await is_maintenance(update, context): return
+    
+    user_id = update.effective_user.id
+    
+    # التحقق من أن المستخدم في وضع أغنيتي وينتظر صورة
+    if context.user_data.get('mysong_mode') and context.user_data.get('step') == 'waiting_for_cover':
+        
+        wait_msg = await update.message.reply_text("⏳ جاري معالجة الصورة ودمجها مع الأغنية...")
+        
+        # تحميل الصورة
+        photo = update.message.photo[-1]  # أفضل جودة
+        tg_photo = await photo.get_file()
+        cover_path = f"cover_{user_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
+        await tg_photo.download_to_drive(cover_path)
+        
+        # الحصول على البيانات
+        audio_path = context.user_data.get('audio_path')
+        title = context.user_data.get('title', 'غير معروف')
+        artist = context.user_data.get('artist', 'غير معروف')
+        
+        if not audio_path or not os.path.exists(audio_path):
+            await wait_msg.edit_text("❌ حدث خطأ: الملف الصوتي غير موجود")
+            return
+        
+        try:
+            # إضافة الميتاداتا والصورة للملف الصوتي
+            audio = ID3(audio_path)
+            
+            # تعديل الاسم والفنان
+            audio["TIT2"] = TIT2(encoding=3, text=title)
+            audio["TPE1"] = TPE1(encoding=3, text=artist)
+            
+            # إضافة الصورة
+            with open(cover_path, "rb") as img:
+                if "APIC" in audio:
+                    del audio["APIC"]
+                audio["APIC"] = APIC(
+                    encoding=3, 
+                    mime="image/jpeg", 
+                    type=3, 
+                    desc="Cover", 
+                    data=img.read()
+                )
+            audio.save()
+            
+            # إرسال الملف النهائي
+            with open(audio_path, "rb") as f:
+                await update.message.reply_audio(
+                    audio=f,
+                    title=title,
+                    performer=artist
+                )
+            
+            # تسجيل العملية في قاعدة البيانات
+            conn = sqlite3.connect(DB_FILE)
+            conn.execute(
+                "INSERT INTO files (user_id, title, artist, date) VALUES (?, ?, ?, ?)",
+                (user_id, title, artist, datetime.now().strftime("%Y-%m-%d %H:%M"))
+            )
+            conn.commit()
+            conn.close()
+            
+            await wait_msg.delete()
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ حدث خطأ: {str(e)}")
+        
+        # تنظيف الملفات المؤقتة
+        for file in [audio_path, cover_path]:
+            if os.path.exists(file):
+                os.remove(file)
+        
+        context.user_data.clear()
+        return
+    
+    # إذا لم يكن المستخدم في الوضع المناسب
+    else:
+        await update.message.reply_text("❌ لست في وضع إضافة صورة حالياً. اختر '🖼️ أغنيتي' أولاً.")
+
+# ============================================
 # معالج النصوص
 # ============================================
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -306,73 +390,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # استقبال الصورة
+        # ملاحظة: لم نعد نتعامل مع الصور هنا لأن photo_handler هو من يتعامل معها
+        # إذا وصلنا هنا مع step = waiting_for_cover ولم تكن رسالة صورة، نخبر المستخدم
         elif step == 'waiting_for_cover':
-            if not update.message.photo:
-                await update.message.reply_text("❌ من فضلك أرسل صورة")
-                return
-            
-            wait_msg = await update.message.reply_text("⏳ جاري معالجة الصورة ودمجها مع الأغنية...")
-            
-            # تحميل الصورة
-            photo = update.message.photo[-1]
-            tg_photo = await photo.get_file()
-            cover_path = f"cover_{user_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
-            await tg_photo.download_to_drive(cover_path)
-            
-            # الحصول على البيانات
-            title = context.user_data.get('title', 'غير معروف')
-            artist = context.user_data.get('artist', 'غير معروف')
-            
-            try:
-                # إضافة الميتاداتا والصورة للملف الصوتي
-                audio = ID3(audio_path)
-                
-                # تعديل الاسم والفنان
-                audio["TIT2"] = TIT2(encoding=3, text=title)
-                audio["TPE1"] = TPE1(encoding=3, text=artist)
-                
-                # إضافة الصورة
-                with open(cover_path, "rb") as img:
-                    if "APIC" in audio:
-                        del audio["APIC"]
-                    audio["APIC"] = APIC(
-                        encoding=3, 
-                        mime="image/jpeg", 
-                        type=3, 
-                        desc="Cover", 
-                        data=img.read()
-                    )
-                audio.save()
-                
-                # إرسال الملف النهائي
-                with open(audio_path, "rb") as f:
-                    await update.message.reply_audio(
-                        audio=f,
-                        title=title,
-                        performer=artist
-                    )
-                
-                # تسجيل العملية في قاعدة البيانات
-                conn = sqlite3.connect(DB_FILE)
-                conn.execute(
-                    "INSERT INTO files (user_id, title, artist, date) VALUES (?, ?, ?, ?)",
-                    (user_id, title, artist, datetime.now().strftime("%Y-%m-%d %H:%M"))
-                )
-                conn.commit()
-                conn.close()
-                
-                await wait_msg.delete()
-                
-            except Exception as e:
-                await update.message.reply_text(f"❌ حدث خطأ: {str(e)}")
-            
-            # تنظيف الملفات المؤقتة
-            for file in [audio_path, cover_path]:
-                if os.path.exists(file):
-                    os.remove(file)
-            
-            context.user_data.clear()
+            await update.message.reply_text("❌ أنا في انتظار صورة وليس نص. أرسل صورة من فضلك.")
             return
         
         # إذا وصلنا هنا، نكمل
