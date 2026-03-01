@@ -10,8 +10,8 @@ DEFAULT_AUDIO_QUALITY = "192k"
 COVER_CACHE = "channel_cover_cached.jpg"
 CHANNEL_USERNAME = "THTOMI"
 
-# ايدي المالك - هذا هو السطر الذي كان ينقصك
-OWNER_ID = 8460454874 
+# ايدي المالك - غير هذا الرقم إلى معرفك
+OWNER_ID = 8460454874  # ⚠️ غير هذا الرقم
 
 # وضع الصيانة
 MAINTENANCE_MODE = False 
@@ -46,7 +46,7 @@ async def is_maintenance(update, context):
 async def auto_clear_cache():
     """تنظيف الملفات المؤقتة من السيرفر"""
     for file in os.listdir():
-        if file.endswith(".mp3") or file.startswith("input_") or file.startswith("output_"):
+        if file.endswith(".mp3") or file.startswith("input_") or file.startswith("output_") or file.startswith("custom_") or file.startswith("final_"):
             try:
                 os.remove(file)
             except:
