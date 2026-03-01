@@ -4,12 +4,12 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMa
 def main_menu_keyboard():
     keyboard = [
         [KeyboardButton("🎵 تعديل الأغاني"), KeyboardButton("🎬 استخراج من الفيديو")],
-        [KeyboardButton("🖼️ أغنيتي (القائمة المتكاملة)")],  # زر واحد فقط
+        [KeyboardButton("🖼️ أغنيتي")],
         [KeyboardButton("🔙 الرجوع إلى البداية")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# قائمة أغنيتي الداخلية (Inline)
+# قائمة أغنيتي الداخلية
 def my_song_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("🎵 تعديل أغنية (اسم + صورة)", callback_data="mysong_edit")],
