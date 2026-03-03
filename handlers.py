@@ -231,10 +231,10 @@ async def media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await wait_msg.edit_text("📝 تمت المعالجة! الآن أرسل (اسم الأغنية) الجديد:")
 
 # ============================================
-# معالج الصور (مخصص لوضع أغنيتي)
+# معالج الصور (يقبل أي نوع من الصور) - نسخة مطورة
 # ============================================
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة الصور المرسلة من المستخدم"""
+    """معالجة الصور المرسلة من المستخدم (سواء photo أو document)"""
     if await is_maintenance(update, context): return
     
     user_id = update.effective_user.id
@@ -244,43 +244,110 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         wait_msg = await update.message.reply_text("⏳ جاري معالجة الصورة ودمجها مع الأغنية...")
         
-        # تحميل الصورة
-        photo = update.message.photo[-1]  # أفضل جودة
-        tg_photo = await photo.get_file()
-        cover_path = f"cover_{user_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
-        await tg_photo.download_to_drive(cover_path)
+        # ===== متغيرات للصورة =====
+        cover_path = f"cover_{user_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         
-        # الحصول على البيانات
+        # ===== تحديد نوع الصورة المرسلة =====
+        
+        # الحالة 1: الصورة مرسلة كـ Photo (الأكثر شيوعاً)
+        if update.message.photo:
+            photo = update.message.photo[-1]  # أفضل جودة
+            tg_photo = await photo.get_file()
+            cover_path += ".jpg"
+            await tg_photo.download_to_drive(cover_path)
+            
+        # الحالة 2: الصورة مرسلة كـ Document (ملف)
+        elif update.message.document:
+            document = update.message.document
+            
+            # التحقق من أن الملف هو صورة
+            mime_type = document.mime_type or ""
+            file_name = document.file_name or ""
+            
+            is_image = (
+                mime_type.startswith('image/') or 
+                file_name.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'))
+            )
+            
+            if not is_image:
+                await wait_msg.edit_text("❌ الملف المرسل ليس صورة. أرسل صورة بصيغة JPG أو PNG.")
+                return
+            
+            # تحميل الصورة
+            tg_doc = await document.get_file()
+            
+            # تحديد امتداد الصورة بناءً على اسم الملف أو نوع MIME
+            if file_name.lower().endswith('.png') or 'png' in mime_type:
+                cover_path += ".png"
+            elif file_name.lower().endswith('.gif') or 'gif' in mime_type:
+                cover_path += ".gif"
+            elif file_name.lower().endswith('.bmp') or 'bmp' in mime_type:
+                cover_path += ".bmp"
+            elif file_name.lower().endswith('.webp') or 'webp' in mime_type:
+                cover_path += ".webp"
+            else:
+                cover_path += ".jpg"  # افتراضي
+            
+            await tg_doc.download_to_drive(cover_path)
+        
+        # الحالة 3: لا صورة ولا document
+        else:
+            await wait_msg.edit_text("❌ لم ترسل صورة. أرسل صورة من فضلك.")
+            return
+        
+        # ===== الحصول على بيانات الأغنية =====
         audio_path = context.user_data.get('audio_path')
         title = context.user_data.get('title', 'غير معروف')
         artist = context.user_data.get('artist', 'غير معروف')
         
         if not audio_path or not os.path.exists(audio_path):
             await wait_msg.edit_text("❌ حدث خطأ: الملف الصوتي غير موجود")
+            # تنظيف الصورة إذا تم تحميلها
+            if os.path.exists(cover_path):
+                os.remove(cover_path)
             return
         
         try:
-            # إضافة الميتاداتا والصورة للملف الصوتي
-            audio = ID3(audio_path)
+            # ===== إضافة الصورة للملف الصوتي =====
+            
+            # محاولة قراءة علامات ID3 الموجودة أو إنشاء جديدة
+            try:
+                audio = ID3(audio_path)
+            except:
+                audio = ID3()
             
             # تعديل الاسم والفنان
             audio["TIT2"] = TIT2(encoding=3, text=title)
             audio["TPE1"] = TPE1(encoding=3, text=artist)
             
-            # إضافة الصورة
+            # تحديد نوع MIME للصورة
+            if cover_path.endswith('.png'):
+                mime_type = "image/png"
+            elif cover_path.endswith('.gif'):
+                mime_type = "image/gif"
+            elif cover_path.endswith('.bmp'):
+                mime_type = "image/bmp"
+            elif cover_path.endswith('.webp'):
+                mime_type = "image/webp"
+            else:
+                mime_type = "image/jpeg"
+            
+            # إضافة الصورة (إزالة أي صورة قديمة أولاً)
             with open(cover_path, "rb") as img:
                 if "APIC" in audio:
                     del audio["APIC"]
                 audio["APIC"] = APIC(
                     encoding=3, 
-                    mime="image/jpeg", 
+                    mime=mime_type, 
                     type=3, 
                     desc="Cover", 
                     data=img.read()
                 )
-            audio.save()
             
-            # إرسال الملف النهائي
+            # حفظ العلامات في الملف (باستخدام ID3v2.3 للتوافق)
+            audio.save(audio_path, v2_version=3)
+            
+            # ===== إرسال الملف النهائي =====
             with open(audio_path, "rb") as f:
                 await update.message.reply_audio(
                     audio=f,
@@ -288,7 +355,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     performer=artist
                 )
             
-            # تسجيل العملية في قاعدة البيانات
+            # ===== تسجيل العملية في قاعدة البيانات =====
             conn = sqlite3.connect(DB_FILE)
             conn.execute(
                 "INSERT INTO files (user_id, title, artist, date) VALUES (?, ?, ?, ?)",
@@ -302,7 +369,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await update.message.reply_text(f"❌ حدث خطأ: {str(e)}")
         
-        # تنظيف الملفات المؤقتة
+        # ===== تنظيف الملفات المؤقتة =====
         for file in [audio_path, cover_path]:
             if os.path.exists(file):
                 os.remove(file)
@@ -367,9 +434,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # ✅ زر تشغيل البوت (الجديد)
+    # زر تشغيل البوت
     elif user_text == "▶️ تشغيل البوت":
-        await start_handler(update, context)  # نفس دالة البداية
+        await start_handler(update, context)
         return
     
     # زر الرجوع إلى البداية
@@ -380,7 +447,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===== معالج وضع أغنيتي (إدخال النصوص) =====
     if context.user_data.get('mysong_mode'):
         step = context.user_data.get('step')
-        audio_path = context.user_data.get('audio_path')
         
         # استقبال اسم الأغنية
         if step == 'waiting_for_title':
@@ -404,7 +470,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ أنا في انتظار صورة وليس نص. أرسل صورة من فضلك.")
             return
         
-        # إذا وصلنا هنا، نكمل
         return
 
     # ===== إكمال عملية التعديل القديمة =====
