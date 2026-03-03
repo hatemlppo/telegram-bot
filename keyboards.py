@@ -15,7 +15,6 @@ def my_song_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("🎵 تعديل أغنية (اسم + صورة)", callback_data="mysong_edit")],
         [InlineKeyboardButton("🎬 استخراج من فيديو + صورة", callback_data="mysong_extract")],
-        [InlineKeyboardButton("🆕 رفع ملف صوتي + صورة جديدة", callback_data="mysong_new")],
         [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_action")]
     ]
     return InlineKeyboardMarkup(keyboard)
