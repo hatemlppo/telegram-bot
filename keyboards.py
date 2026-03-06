@@ -25,7 +25,7 @@ def quality_keyboard(action_type):
         [
             InlineKeyboardButton("128k", callback_data=f"q_128_{action_type}"),
             InlineKeyboardButton("192k", callback_data=f"q_192_{action_type}"),
-        [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_action")]
+        InlineKeyboardButton("❌ إلغاء", callback_data="cancel_action")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
